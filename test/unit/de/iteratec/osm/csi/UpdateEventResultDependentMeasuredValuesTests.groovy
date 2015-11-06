@@ -19,6 +19,8 @@
 
 package de.iteratec.osm.csi
 
+import de.iteratec.osm.measurement.schedule.ConnectivityProfile
+
 import static org.junit.Assert.assertEquals
 import grails.test.mixin.*
 import grails.test.mixin.support.*
@@ -54,7 +56,7 @@ import de.iteratec.osm.util.ServiceMocker
 @TestMixin(GrailsUnitTestMixin)
 @TestFor(EventMeasuredValueService)
 @Mock([Browser, BrowserAlias, JobGroup, Location, MeasuredEvent, Page, WebPageTestServer, MeasuredValue, MeasuredValueInterval,
-	AggregatorType, Location, EventResult, JobResult, Job, OsmConfiguration, HourOfDay, Script, MeasuredValueUpdateEvent])
+	AggregatorType, Location, EventResult, JobResult, Job, OsmConfiguration, HourOfDay, Script, MeasuredValueUpdateEvent, ConnectivityProfile])
 class UpdateEventResultDependentMeasuredValuesTests {
 	
 	static final double DELTA = 1e-15
@@ -90,7 +92,7 @@ class UpdateEventResultDependentMeasuredValuesTests {
 		mockGenerator = ServiceMocker.create()
 		mockGenerator.mockOsmConfigCacheService(serviceUnderTest)
 		mockGenerator.mockEventResultService(serviceUnderTest)
-		mockGenerator.mockJobResultService(serviceUnderTest)
+		mockGenerator.mockJobResultDaoService(serviceUnderTest)
 		mockGenerator.mockBrowserService(serviceUnderTest)
 		mockGenerator.mockMeasuredValueUpdateEventDaoService(serviceUnderTest)
 		Map idAsStringToJobGroupMap_irrelevantCauseNotUsedInTheseTests = [:]
@@ -104,11 +106,11 @@ class UpdateEventResultDependentMeasuredValuesTests {
 			idAsStringToMeasuredEventMap_irrelevantCauseNotUsedInTheseTests,
 			idAsStringToPageMap_irrelevantCauseNotUsedInTheseTests,
 			idAsStringToBrowserMap_irrelevantCauseNotUsedInTheseTests,
-			idAsStringToLocationMap_irrelevantCauseNotUsedInTheseTests)
-		
+			idAsStringToLocationMap_irrelevantCauseNotUsedInTheseTests
+        )
 		createTestDataForAllTests()
 		initializeFields()
-		
+
     }
 
     void tearDown() {
@@ -259,6 +261,9 @@ class UpdateEventResultDependentMeasuredValuesTests {
 			jobResultJobConfigId: jobResult.job.ident(),
 			measuredEvent: event,
 			speedIndex: EventResult.SPEED_INDEX_DEFAULT_VALUE,
+			connectivityProfile: null,
+            customConnectivityName: null,
+            noTrafficShapingAtAll: true,
 			tag: resultTag).save(failOnError: true)
 			
 			jobResult.save(failOnError: true)
@@ -365,8 +370,12 @@ class UpdateEventResultDependentMeasuredValuesTests {
 			runs: 1,
 			jobGroup: csiGroup1,
 			script: script,
-			maxDownloadTimeInMinutes: 60
-			).save(failOnError: true)
+			maxDownloadTimeInMinutes: 60,
+            customConnectivityProfile: false,
+			connectivityProfile: null,
+			noTrafficShapingAtAll: true
+        ).save(failOnError: true)
+
 		job2 = new Job(
 			active: false,
 			label: labelJobOfCsiGroup2,
@@ -376,8 +385,12 @@ class UpdateEventResultDependentMeasuredValuesTests {
 			runs: 1,
 			jobGroup: csiGroup2,
 			script: script,
-			maxDownloadTimeInMinutes: 60
-			).save(failOnError: true)
+			maxDownloadTimeInMinutes: 60,
+			customConnectivityProfile: false,
+			connectivityProfile: null,
+			noTrafficShapingAtAll: true
+        ).save(failOnError: true)
+
 		//wptjobrun
 		new JobResult(
 			job: job1,

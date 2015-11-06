@@ -15,42 +15,36 @@
 * limitations under the License.
 */
 
-
-import de.iteratec.osm.ConfigService
+import de.iteratec.osm.OsmConfiguration
 import de.iteratec.osm.batch.BatchActivity
 import de.iteratec.osm.batch.Status
-import grails.util.Environment
-
-import org.joda.time.DateTime
-
-import de.iteratec.osm.report.chart.MeasuredValueUtilService
+import de.iteratec.osm.csi.*
+import de.iteratec.osm.measurement.environment.Browser
+import de.iteratec.osm.measurement.environment.wptserverproxy.LocationAndResultPersisterService
+import de.iteratec.osm.measurement.environment.wptserverproxy.ProxyService
 import de.iteratec.osm.measurement.schedule.ConnectivityProfile
 import de.iteratec.osm.measurement.schedule.JobGroup
 import de.iteratec.osm.measurement.schedule.JobGroupType
 import de.iteratec.osm.measurement.schedule.JobProcessingService
-import de.iteratec.osm.csi.Page
-import de.iteratec.osm.OsmConfiguration
 import de.iteratec.osm.report.chart.AggregatorType
 import de.iteratec.osm.report.chart.MeasurandGroup
 import de.iteratec.osm.report.chart.MeasuredValueInterval
+import de.iteratec.osm.report.chart.MeasuredValueUtilService
+import de.iteratec.osm.result.JobResultDaoService
 import de.iteratec.osm.security.Role
 import de.iteratec.osm.security.User
 import de.iteratec.osm.security.UserRole
-import de.iteratec.osm.csi.CsTargetGraph
-import de.iteratec.osm.csi.CsTargetValue
-import de.iteratec.osm.csi.EventMeasuredValueService
-import de.iteratec.osm.csi.HourOfDay
-import de.iteratec.osm.measurement.environment.wptserverproxy.LocationAndResultPersisterService
-import de.iteratec.osm.measurement.environment.wptserverproxy.ProxyService
-import de.iteratec.osm.result.JobResultService
-import de.iteratec.osm.measurement.environment.Browser
 import de.iteratec.osm.util.I18nService
+import grails.util.Environment
+import org.joda.time.DateTime
+
+import static de.iteratec.osm.util.Constants.DEFAULT_CSI_MAPPINGS
 
 class BootStrap {
 	
 	EventMeasuredValueService eventMeasuredValueService
 	MeasuredValueUtilService measuredValueUtilService
-	JobResultService jobResultService
+	JobResultDaoService jobResultService
 	JobProcessingService jobProcessingService
 	I18nService i18nService
 	LocationAndResultPersisterService locationAndResultPersisterService
@@ -58,7 +52,7 @@ class BootStrap {
 	def grailsApplication
 
 	def init = { servletContext ->
-		
+
 		switch (Environment.getCurrent()) {
 			case Environment.DEVELOPMENT :
 				initApplicationData(true)
@@ -89,11 +83,12 @@ class BootStrap {
 		initMeasurementInfrastructure()
 		initJobScheduling()
 		cancelActiveBatchActivity()
+        excludePropertiesInJsonRepresentationsofDomainObjects()
         fixGrailsBugs()
-		
+
 		log.info "initApplicationData() OSM ends"
 	}
-	
+
 	void initConfig(){
 		log.info "initConfig() OSM starts"
 		
@@ -122,7 +117,7 @@ class BootStrap {
 		createConnectivityProfileIfMissing(6000, 512, 50, 'DSL 6.000', 0)
 		createConnectivityProfileIfMissing(384, 384, 140, 'UMTS', 0)
 		createConnectivityProfileIfMissing(3600, 1500, 40, 'UMTS - HSDPA', 0)
-		
+
 		jobProcessingService.scheduleAllActiveJobs()
 		
 		log.info "initJobScheduling() OSM ends"
@@ -301,37 +296,60 @@ class BootStrap {
 			date: date,
 			csInPercent: percent,
 			).save(failOnError: true)
-		
-		String labelTargetCsi = i18nService.msg('de.iteratec.isocsi.targetcsi.label', 'Target-CSI')
-		String descriptionTargetCsi = i18nService.msg('de.iteratec.isocsi.targetcsi.description', 'Customer satisfaction index defined as target.')
-		CsTargetGraph targetGraph = CsTargetGraph.findByLabel(labelTargetCsi)?:new CsTargetGraph(
-			label: labelTargetCsi,
-			description: descriptionTargetCsi,
+
+		String labelTargetCsi_EN = i18nService.msgInLocale('de.iteratec.isocsi.targetcsi.label', Locale.ENGLISH, 'Target-CSI')
+		String descriptionTargetCsi_EN = i18nService.msgInLocale('de.iteratec.isocsi.targetcsi.description', Locale.ENGLISH, 'Customer satisfaction index defined as target.')
+		CsTargetGraph.findByLabel(labelTargetCsi_EN)?:new CsTargetGraph(
+			label: labelTargetCsi_EN,
+			description: descriptionTargetCsi_EN,
 			pointOne: val1,
 			pointTwo: val2,
 			defaultVisibility: true
 			).save(failOnError: true)
+        String labelTargetCsi_DE = i18nService.msgInLocale('de.iteratec.isocsi.targetcsi.label', Locale.GERMAN, 'Target-CSI')
+        String descriptionTargetCsi_DE = i18nService.msgInLocale('de.iteratec.isocsi.targetcsi.description', Locale.GERMAN, 'Customer satisfaction index defined as target.')
+        CsTargetGraph.findByLabel(labelTargetCsi_DE)?:new CsTargetGraph(
+                label: labelTargetCsi_DE,
+                description: descriptionTargetCsi_DE,
+                pointOne: val1,
+                pointTwo: val2,
+                defaultVisibility: true
+        ).save(failOnError: true)
 			
-			/*
-			 * The following doesn't work with grails version 2.3.3.
-			 *  Leeds to exceptions on startup ...
-			 */
-			
-//		if (!targetGraph.pointOne.equals(val1)) {
-//			targetGraph.pointOne = val1
-//			targetGraph.save(failOnError: true)
-//		}
-//		if (!targetGraph.pointTwo.equals(val2)) {
-//			targetGraph.pointOne = val1
-//			targetGraph.save(failOnError: true)
-//		}
-				
+        createDefaultTimeToCsiMappingIfMissing()
+
 		log.info "initCsiData ends"
 	}
+
+    /**
+     * These default mappings can be assigned to measured pages if no data of a real customer survey exist.
+     * Get created only if no one exist at all.
+     */
+    void createDefaultTimeToCsiMappingIfMissing(){
+
+        if(DefaultTimeToCsMapping.list().size()==0){
+
+            Map indexToMappingName = [1: '1 - impatient', 2: '2', 3: '3', 4: '4', 5: '5 - patient']
+            DEFAULT_CSI_MAPPINGS.each {mappingDataList ->
+
+                5.times{defaultMappingindex ->
+                    new DefaultTimeToCsMapping(
+                        name: indexToMappingName[defaultMappingindex+1],
+                        loadTimeInMilliSecs: mappingDataList[0],
+                        customerSatisfactionInPercent: mappingDataList[defaultMappingindex+1]
+                    ).save(failOnError: true)
+                }
+
+            }
+
+        }
+
+    }
 	
 	void createConnectivityProfileIfMissing(Integer bwDown, Integer bwUp, Integer latency, String name, Integer packetLoss){
 		ConnectivityProfile.findByName(name)?:
 			new ConnectivityProfile(
+                active: true,
 				bandwidthDown: bwDown,
 				bandwidthUp: bwUp,
 				latency: latency,
@@ -399,6 +417,35 @@ class BootStrap {
 			}
 		}
 	}
+
+    void excludePropertiesInJsonRepresentationsofDomainObjects(){
+
+        ArrayList<String> propertiesToExcludeFromAllDomains = ['class', 'dirty', 'dirtyPropertyNames', 'errors', 'properties']
+
+        grailsApplication.domainClasses*.clazz.each {domainClass ->
+            grails.converters.JSON.registerObjectMarshaller(domainClass) {
+
+                Map propertiesToRepresent = it.properties.findAll {k,v -> !propertiesToExcludeFromAllDomains.contains(k)}
+                propertiesToRepresent['id'] = it.ident()
+
+                removeAllServices(propertiesToRepresent)
+                removeDomainSpecificProperties(domainClass, propertiesToRepresent)
+
+                return propertiesToRepresent
+
+            }
+        }
+    }
+    void removeDomainSpecificProperties(Class domainClass, Map propertiesToRepresent){
+        if (domainClass == de.iteratec.osm.measurement.environment.BrowserAlias) propertiesToRepresent.remove('browser')
+        else if (domainClass == de.iteratec.osm.measurement.schedule.JobGroup) propertiesToRepresent.remove('graphiteServers')
+    }
+    void removeAllServices(Map propertiesToRepresent){
+        Iterator iterator = propertiesToRepresent.keySet().iterator()
+        while(iterator.hasNext()){
+            if (iterator.next().endsWith('Service')) iterator.remove()
+        }
+    }
 
     void fixGrailsBugs(){
         // without this it's not safe to test on JSONObject instances in a groovy way

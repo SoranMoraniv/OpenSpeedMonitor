@@ -1,16 +1,6 @@
 <%@ page import="de.iteratec.osm.measurement.environment.Location"%>
 <%@ page import="de.iteratec.osm.measurement.environment.WebPageTestServer" %>
 
-<r:use modules="tagit, chosen, jobedit, future-only-timeago" />
-<g:if test="${org.springframework.web.servlet.support.RequestContextUtils.getLocale(request).language.equals('de')}">
-	<r:use modules="timeago-de" />
-</g:if>
-<r:script>
-    $(document).ready(function() {
-		    $("ul[name='tags']").tagit({select:true, tagSource: "${g.createLink(action: 'tags', absolute: true)}"});
-	});
-</r:script>
-
 <div class="row form-group ${hasErrors(bean: job, field: 'label', 'error')} required">
 	<label for="label" class="span3 text-right" style="width: 70px !important;">
 		<g:message code="job.label.label" default="label" /><span class="required-indicator">*</span>
@@ -50,8 +40,8 @@
     </li>            
   </ul>
   <div class="tab-content">
-    <div class="tab-pane active" id="1">      
-	  <g:render template="testSettingsTab" model="${['job': job]}" />
+    <div class="tab-pane active" id="1">
+	  <g:render template="testSettingsTab" model="${['job': job, 'connectivites': connectivites]}" />
     </div>
     <div class="tab-pane" id="2">
       <g:render template="scriptTab" model="${['job': job]}" />

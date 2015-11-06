@@ -17,16 +17,21 @@
 
 package de.iteratec.osm.csi
 
-import static de.iteratec.osm.csi.Contract.requiresArgumentNotNull
 import de.iteratec.osm.csi.weighting.WeightFactor
+import de.iteratec.osm.d3Data.BarChartData
+import de.iteratec.osm.d3Data.TreemapData
+import de.iteratec.osm.d3Data.ChartEntry
 import de.iteratec.osm.measurement.environment.Browser
 import de.iteratec.osm.measurement.environment.Location
 import de.iteratec.osm.measurement.environment.dao.BrowserDaoService
 import de.iteratec.osm.measurement.environment.dao.LocationDaoService
+import de.iteratec.osm.measurement.schedule.ConnectivityProfileDaoService
 import de.iteratec.osm.measurement.schedule.JobGroup
 import de.iteratec.osm.measurement.schedule.dao.JobGroupDaoService
 import de.iteratec.osm.measurement.schedule.dao.PageDaoService
 import de.iteratec.osm.p13n.CookieBasedSettingsService
+import de.iteratec.osm.report.UserspecificDashboard
+import de.iteratec.osm.report.UserspecificDashboardDiagramType
 import de.iteratec.osm.report.chart.*
 import de.iteratec.osm.report.chart.dao.AggregatorTypeDaoService
 import de.iteratec.osm.result.EventResultService
@@ -37,10 +42,8 @@ import de.iteratec.osm.util.AnnotationUtil
 import de.iteratec.osm.util.ControllerUtils
 import de.iteratec.osm.util.I18nService
 import de.iteratec.osm.util.TreeMapOfTreeMaps
-
-import java.text.NumberFormat
-import java.text.SimpleDateFormat
-
+import grails.converters.JSON
+import org.codehaus.groovy.grails.web.json.JSONObject
 import org.codehaus.groovy.grails.web.mapping.LinkGenerator
 import org.joda.time.DateTime
 import org.joda.time.Days
@@ -48,11 +51,17 @@ import org.joda.time.Duration
 import org.joda.time.Interval
 import org.joda.time.format.DateTimeFormat
 import org.joda.time.format.DateTimeFormatter
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.web.multipart.MultipartFile
 import org.springframework.web.servlet.support.RequestContextUtils
 import org.supercsv.encoder.DefaultCsvEncoder
 import org.supercsv.io.CsvListWriter
 import org.supercsv.prefs.CsvPreference
+
+import java.text.NumberFormat
+import java.text.SimpleDateFormat
+
+import static de.iteratec.osm.csi.Contract.requiresArgumentNotNull
 
 //TODO: implement some tests for this controller
 
@@ -78,7 +87,8 @@ class CsiDashboardController {
     MeasuredValueUtilService measuredValueUtilService
     CookieBasedSettingsService cookieBasedSettingsService
     EventService eventService
-
+    def springSecurityService
+    ConnectivityProfileDaoService connectivityProfileDaoService
     /**
      * The Grails engine to generate links.
      *
@@ -185,6 +195,32 @@ class CsiDashboardController {
     }
 
     /**
+     * deletes custom Dashboard
+     *
+     * @return Nothing, redirects immediately.
+     */
+    Map<String, Object> delete() {
+
+        def userspecificDashboardInstance = UserspecificDashboard.get(params.id)
+        if (!userspecificDashboardInstance) {
+            flash.message = message(code: 'default.not.found.message', args: [message(code: 'custom.dashboard.label', default: 'Custom dashboard'), params.id])
+            redirect(action: "list")
+            return
+        }
+
+        try {
+           userspecificDashboardInstance.delete(flush: true)
+                flash.message = message(code: 'default.deleted.message', args: [message(code: 'custom.dashboard.label', default: 'Custom dashboard'), params.id])
+                redirect(action: "list")
+        } catch (DataIntegrityViolationException e) {
+                flash.message = message(code: 'default.not.deleted.message', args: [message(code: 'custom.dashboard.label', default: 'Custom dashboard'), params.id])
+                redirect(action: "show", id: params.id)
+        }
+
+        redirectWith303('showAll')
+    }
+
+    /**
      * Thats the view used to show CSI graphs with previous selection of date
      * range, groups and more filter criteria. This page is intended to be
      * used by admins and developers.
@@ -196,7 +232,6 @@ class CsiDashboardController {
      *         {@linkplain Map#isEmpty() empty}.
      */
     Map<String, Object> showAll(CsiDashboardShowAllCommand cmd) {
-
         Map<String, Object> modelToRender = constructStaticViewDataOfShowAll()
         cmd.copyRequestDataToViewModelMap(modelToRender)
 
@@ -340,7 +375,8 @@ class CsiDashboardController {
         Interval fixedTimeFrame = fixTimeFrame(timeFrame, interval.getIntervalInMinutes())
 
 
-        List<OsmChartGraph> graphs = customerSatisfactionHighChartService.getCalculatedPageMeasuredValuesAsHighChartMap(fixedTimeFrame, measuredValuesQueryParams, interval)
+        OsmRickshawChart chart = customerSatisfactionHighChartService.getCalculatedPageMeasuredValuesAsHighChartMap(fixedTimeFrame, measuredValuesQueryParams, interval)
+        List<OsmChartGraph> graphs = chart.osmChartGraphs
 
         DateTime resetFromDate = fixedTimeFrame.getStart()
         DateTime resetToDate = fixedTimeFrame.getEnd()
@@ -348,7 +384,7 @@ class CsiDashboardController {
         if( withTargetGraph )
         {
             graphs.addAll(customerSatisfactionHighChartService.getCsRelevantStaticGraphsAsResultMapForChart(
-                    resetFromDate.minusDays(1), resetToDate.plusDays(1)))
+            resetFromDate.minusDays(1), resetToDate.plusDays(1)))
         }
 
         boolean includeCsTargetGraphs = false
@@ -359,6 +395,8 @@ class CsiDashboardController {
 
         modelToRender.put('wptCustomerSatisfactionValues', graphs)
         modelToRender.put('wptCustomerSatisfactionValuesForTable', formatForTable(graphs, includeCsTargetGraphs))
+
+        modelToRender.put('labelSummary', chart.osmChartGraphsCommonLabel);
 
         modelToRender.put('markerShouldBeEnabled', true)
         modelToRender.put('labelShouldBeEnabled', false)
@@ -390,8 +428,9 @@ class CsiDashboardController {
 
         Interval fixedTimeFrame = fixTimeFrame(timeFrame, MeasuredValueInterval.HOURLY)
 
-        List<OsmChartGraph> graphs = customerSatisfactionHighChartService.getCalculatedHourlyEventMeasuredValuesAsHighChartMap(
-                fixedTimeFrame.getStart().toDate(), fixedTimeFrame.getEnd().toDate(), queryParams)
+        OsmRickshawChart chart = customerSatisfactionHighChartService.getCalculatedHourlyEventMeasuredValuesAsHighChartMap(
+                fixedTimeFrame.getStart().toDate(), fixedTimeFrame.getEnd().toDate(), queryParams
+        )
 
         DateTime resetFromDate = fixedTimeFrame.getStart()
         DateTime resetToDate = fixedTimeFrame.getEnd()
@@ -402,8 +441,10 @@ class CsiDashboardController {
         boolean includeCsTargetGraphs = true
         modelToRender.put('fromTimestampForHighChart', resetFromDate.toDate().getTime())
         modelToRender.put('toTimestampForHighChart', resetToDate.toDate().getTime())
-        modelToRender.put('wptCustomerSatisfactionValues', graphs)
-        modelToRender.put('wptCustomerSatisfactionValuesForTable', formatForTable(graphs, includeCsTargetGraphs))
+        modelToRender.put('wptCustomerSatisfactionValues', chart.osmChartGraphs)
+        modelToRender.put('wptCustomerSatisfactionValuesForTable', formatForTable(chart.osmChartGraphs, includeCsTargetGraphs))
+
+        modelToRender.put('labelSummary', chart.osmChartGraphsCommonLabel);
 
         modelToRender.put('markerShouldBeEnabled', false)
         modelToRender.put('labelShouldBeEnabled', false)
@@ -464,14 +505,15 @@ class CsiDashboardController {
             boolean withTargetGraph,
             boolean moveGraphsByOneWeek)
     {
-        // TODO Test this: Structure and data...
         Interval fixedTimeFrame = fixTimeFrame(timeFrame, interval.getIntervalInMinutes())
 
         DateTime resetFromDate = fixedTimeFrame.getStart()
         DateTime resetToDate = fixedTimeFrame.getEnd()
 
-        List<OsmChartGraph> graphs = customerSatisfactionHighChartService.getCalculatedShopMeasuredValuesAsHighChartMap(
-                fixedTimeFrame, interval, measuredValuesQueryParams)
+        OsmRickshawChart chart = customerSatisfactionHighChartService.getCalculatedShopMeasuredValuesAsHighChartMap(
+                fixedTimeFrame, interval, measuredValuesQueryParams
+        )
+        List<OsmChartGraph> graphs = chart.osmChartGraphs
 
         if(moveGraphsByOneWeek==true) {
             moveDataPointsOneWeekForward(graphs)
@@ -481,18 +523,14 @@ class CsiDashboardController {
 
         Integer oneDayOffset = Math.round(MeasuredValueInterval.DAILY)
         DateTime resetFromDateWithOffsetChange = resetFromDate.minusMinutes(oneDayOffset)
-        Integer rightOffset
-        if (cookieBasedSettingsService.getChartingLibraryToUse() == ChartingLibrary.HIGHCHARTS){
-            rightOffset = oneDayOffset * 4
-        }else {
-            rightOffset = oneDayOffset
-        }
+        Integer rightOffset = oneDayOffset
         DateTime resetToDateWithOffsetChange = resetToDate.plusMinutes(rightOffset)
 
         if( withTargetGraph )
         {
             graphs.addAll(customerSatisfactionHighChartService.getCsRelevantStaticGraphsAsResultMapForChart(
-                    resetFromDateWithOffsetChange.minusDays(1), resetToDateWithOffsetChange.plusDays(1)))
+                    resetFromDateWithOffsetChange.minusDays(1), resetToDateWithOffsetChange.plusDays(1))
+            )
         }
 
         boolean includeCsTargetGraphs = true
@@ -500,6 +538,8 @@ class CsiDashboardController {
         modelToRender.put('toTimestampForHighChart', resetToDateWithOffsetChange.toDate().getTime())
         modelToRender.put('wptCustomerSatisfactionValues', graphs)
         modelToRender.put('wptCustomerSatisfactionValuesForTable', formatForTable(graphs, includeCsTargetGraphs))
+
+        modelToRender.put('labelSummary', chart.osmChartGraphsCommonLabel);
 
         modelToRender.put('markerShouldBeEnabled', true)
         modelToRender.put('labelShouldBeEnabled', false)
@@ -680,6 +720,128 @@ class CsiDashboardController {
 
     /**
      * <p>
+    * Ajax service to confirm that dashboard name entered for saving custom dashboard was unique.
+    * </p>
+    *
+    * @param proposedDashboardName
+    *         The proposed Dashboard Name;
+    *         not <code>null</code>.
+    * @return nothing, immediately sends HTTP response codes to client.
+    */
+    def validateDashboardName(String proposedDashboardName) {
+        UserspecificDashboard newCustomDashboard = new UserspecificDashboard(dashboardName: proposedDashboardName)
+        if (!newCustomDashboard.validate()) {
+            response.sendError(302, 'dashboard by that name exists already')
+            return null
+        } else {
+            response.sendError(200, 'OK')
+            return null
+        }
+    }
+
+    /**
+     * <p>
+    * Ajax service to validate and store custom dashboard settings.
+    * </p>
+    *
+    * @param values
+    *         The dashboard settings, JSON encoded;
+    *         not <code>null</code>.
+    * @param dashboardName
+    *         The proposed Dashboard Name;
+    *         not <code>null</code>.
+    * @param publiclyVisible
+    *         boolean value indicating if the custom dashboard should be visible to everyone or just its creator;
+    *         not <code>null</code>.
+    * @return nothing, immediately sends HTTP response codes to client.
+    */
+    def validateAndSaveDashboardValues(String values, String dashboardName, String publiclyVisible, String wideScreenDiagramMontage) {
+        JSONObject dashboardValues = JSON.parse(values)
+        Date fromDate = SIMPLE_DATE_FORMAT.parse(dashboardValues.from)
+        Date toDate = SIMPLE_DATE_FORMAT.parse(dashboardValues.to)
+        Collection<Long> selectedFolder = []
+        Collection<Long> selectedPages = []
+        Collection<Long> selectedMeasuredEventIds = []
+        Collection<Long> selectedBrowsers = []
+        Collection<Long> selectedLocations = []
+        String selectedFolderString = ""
+        String selectedPagesString = ""
+        String selectedMeasuredEventIdsString = ""
+        String selectedBrowsersString = ""
+        String selectedLocationsString = ""
+        dashboardValues.each { id, data ->
+           def dataToAssign
+           if (data instanceof org.codehaus.groovy.grails.web.json.JSONArray) {
+               dataToAssign = data.join(',')
+               dataToAssign = dataToAssign.replace( '"', '' )
+           } else {
+               dataToAssign = data
+           }
+            switch (id) {
+                   case ~/^selectedFolder$/:
+                       selectedFolderString = dataToAssign
+                       data.each() {
+                           selectedFolder.push(it)
+                       }
+                       break
+                   case ~/^selectedPages$/:
+                       selectedPagesString = dataToAssign
+                       data.each() {
+                           selectedPages.push(it)
+                       }
+                       break
+                   case ~/^selectedMeasuredEventIds$/:
+                       selectedMeasuredEventIdsString = dataToAssign
+                       data.each() {
+                           selectedMeasuredEventIds.push(it)
+                       }
+                       break
+                   case ~/^selectedBrowsers$/:
+                       selectedBrowsersString = dataToAssign
+                       data.each() {
+                           selectedBrowsers.push(it)
+                       }
+                       break
+                   case ~/^selectedLocations$/:
+                       selectedLocationsString = dataToAssign
+                       data.each() {
+                           selectedLocations.push(it)
+                       }
+                       break
+            }
+        }
+        def cmd = new CsiDashboardShowAllCommand(from: fromDate, to: toDate, fromHour: dashboardValues.fromHour, fromMinute: dashboardValues.fromMinute,
+            toHour: dashboardValues.toHour, toMinute: dashboardValues.toMinute, aggrGroup: dashboardValues.aggrGroup, selectedFolder: selectedFolder,
+            selectedPages: selectedPages, selectedMeasuredEventIds: selectedMeasuredEventIds, selectedAllMeasuredEvents: dashboardValues.selectedAllMeasuredEvents,
+            selectedBrowsers: selectedBrowsers, selectedAllBrowsers: dashboardValues.selectedAllBrowsers, selectedLocations: selectedLocations,
+            selectedAllLocations: dashboardValues.selectedAllLocations, debug: dashboardValues.debug, selectedTimeFrameInterval: dashboardValues.selectedTimeFrameInterval,
+            includeInterval: dashboardValues.includeInterval, setFromHour: dashboardValues.setFromHour, setToHour: dashboardValues.setToHour)
+
+        if (!cmd.validate()) {
+            //send errors
+            def errMsgList = cmd.errors.allErrors.collect{g.message([error : it])}
+            response.sendError(400, "rkrkrk" + errMsgList.toString() + "rkrkrk") // Apache Tomcat will output the response as part of (HTML) error page - 'rkrkrk' are the delimiters so the AJAX frontend can find the message
+            return null
+        } else {
+           def username = springSecurityService.authentication.principal.getUsername()
+            UserspecificDashboard newCustomDashboard = new UserspecificDashboard(diagramType: UserspecificDashboardDiagramType.CSI, fromDate: fromDate, toDate: toDate, fromHour: cmd.fromHour,
+                fromMinute: cmd.fromMinute, toHour: cmd.toHour, toMinute: cmd.toMinute, aggrGroup: cmd.aggrGroup, selectedFolder: selectedFolderString, selectedPages: selectedPagesString,
+                selectedMeasuredEventIds: selectedMeasuredEventIdsString, selectedAllMeasuredEvents: cmd.selectedAllMeasuredEvents, selectedBrowsers: selectedBrowsersString,
+                selectedAllBrowsers: cmd.selectedAllBrowsers, selectedLocations: selectedLocationsString, selectedAllLocations: cmd.selectedAllLocations, debug: cmd.debug,
+                selectedTimeFrameInterval: cmd.selectedTimeFrameInterval, includeInterval: cmd.includeInterval, publiclyVisible: publiclyVisible, wideScreenDiagramMontage: wideScreenDiagramMontage, dashboardName: dashboardName, username: username,
+                setFromHour: cmd.setFromHour, setToHour: cmd.setToHour)
+           if (!newCustomDashboard.save(failOnError: true, flush: true)) {
+               response.sendError(500, 'save error')
+               return null
+           } else {
+               response.sendError(200, 'OK')
+               return null
+           }
+        }
+    }
+
+    /**
+     * <p>
      * Converts the specified CSI values in the source map to a CSV
      * corresponding to RFC 4180 written to specified {@link Writer}.
      * </p>
@@ -843,6 +1005,9 @@ class CsiDashboardController {
                 sort(false, { Location it -> it.location })
         result.put('locations', locations)
 
+        // ConnectivityProfiles
+        result['connectivityProfiles'] = connectivityProfileDaoService.findAll().sort(false, { it.name.toLowerCase() });
+
         // JavaScript-Utility-Stuff:
         result.put("dateFormatString", DATE_FORMAT_STRING_FOR_HIGH_CHART)
         result.put("weekStart", MONDAY_WEEKSTART)
@@ -880,7 +1045,6 @@ class CsiDashboardController {
             locationsOfBrowsers.put(eachBrowser.getId(), locationIds)
         }
         result.put('locationsOfBrowsers', locationsOfBrowsers)
-        result.put("chartRenderingLibrary", cookieBasedSettingsService.getChartingLibraryToUse())
         result.put('defaultChartTitle', csiHelperService.getCsiChartDefaultTitle())
 
         // Done! :)
@@ -927,11 +1091,31 @@ class CsiDashboardController {
     def weights() {
         CsiDashboardController.log.info("params=$params")
         //		List<String> params.errorMessagesCsi instanceof String?[params.errorMessagesCsi]:params.errorMessagesCsi
+
+        //Labels for charts
+        String zeroWeightLabel = i18nService.msg("de.iteratec.osm.d3Data.treemap.zeroWeightLabel", "Pages ohne Gewichtung")
+        String dataLabel = i18nService.msg("de.iteratec.osm.d3Data.treemap.dataLabel", "Page")
+        String weightLabel = i18nService.msg("de.iteratec.osm.d3Data.treemap.weightLabel", "Gewichtung")
+        String xAxisLabel = i18nService.msg("de.iteratec.osm.d3Data.barChart.xAxisLabel", "Tageszeit")
+        String yAxisLabel = i18nService.msg("de.iteratec.osm.d3Data.barChart.yAxisLabel", "Gewichtung")
+
+        // arrange treemap data
+        TreemapData treemapData = new TreemapData(zeroWeightLabel: zeroWeightLabel, dataName: dataLabel, weightName: weightLabel);
+        pageDaoService.findAll().each {p -> treemapData.addNode(new ChartEntry(name: p.name, weight: p.weight))}
+        def treemapDataJSON = treemapData as JSON
+
+        // arrange barchart data
+        BarChartData barChartData = new BarChartData(xLabel: xAxisLabel, yLabel: yAxisLabel)
+        HourOfDay.findAll().each {h -> barChartData.addDatum(new ChartEntry(name: h.fullHour.toString(), weight: h.weight))}
+        def barChartJSON = barChartData as JSON
+
         [browsers:browserDaoService.findAll(),
             pages: pageDaoService.findAll(),
             // FIXME Change to use a DAO
             hoursOfDay: HourOfDay.findAll(),
-            errorMessagesCsi: params.list('errorMessagesCsi')]
+            errorMessagesCsi: params.list('errorMessagesCsi'),
+            treemapData: treemapDataJSON,
+            barchartData: barChartJSON]
     }
     def uploadBrowserWeights(){
         MultipartFile csv = request.getFile('browserCsv')

@@ -17,7 +17,7 @@
 
 package de.iteratec.osm.result
 
-import de.iteratec.osm.measurement.schedule.Job
+import de.iteratec.osm.measurement.schedule.ConnectivityProfile
 import de.iteratec.osm.result.detail.WebPerformanceWaterfall
 import de.iteratec.osm.csi.OsmConfigCacheService
 import de.iteratec.osm.csi.CsiValue
@@ -140,6 +140,24 @@ class EventResult implements CsiValue {
 	Date jobResultDate
 	Long jobResultJobConfigId
 
+	/**
+	 * This result was measured with a predefined connectivity profile.
+	 *
+	 */
+	ConnectivityProfile connectivityProfile;
+
+    /**
+     * If this is not null this result was measured with a connectivity configured in {@link Job}.
+     *
+     */
+	String customConnectivityName;
+
+    /**
+     * True if this result was measured without traffic shaping at all.
+     */
+    boolean noTrafficShapingAtAll
+
+
 	//static belongsTo = JobResult
 	static belongsTo = [jobResult: JobResult]
 
@@ -179,6 +197,46 @@ class EventResult implements CsiValue {
 		webPerformanceWaterfall(nullable: true)
 
         testAgent(nullable: true)
+
+//        connectivityProfile(nullable: true)
+//        customConnectivityName(nullable: true)
+
+		connectivityProfile(nullable: true, validator: { currentProfile, eventResultInstance ->
+
+            boolean notNullAndNothingElse =
+                    currentProfile != null &&
+                        eventResultInstance.customConnectivityName == null &&
+                        eventResultInstance.noTrafficShapingAtAll == false
+            boolean nullAndCustom =
+                    currentProfile == null &&
+                            eventResultInstance.customConnectivityName != null &&
+                            eventResultInstance.noTrafficShapingAtAll == false
+            boolean nullAndNative =
+                    currentProfile == null &&
+                            eventResultInstance.customConnectivityName == null &&
+                            eventResultInstance.noTrafficShapingAtAll == true
+
+            return notNullAndNothingElse || nullAndCustom || nullAndNative;
+
+        })
+		customConnectivityName(nullable: true, validator: { currentCustomName, eventResultInstance ->
+
+            boolean notNullAndNothingElse =
+                    currentCustomName != null &&
+                            eventResultInstance.noTrafficShapingAtAll == false &&
+                            eventResultInstance.connectivityProfile == null
+            boolean nullAndNative =
+                    currentCustomName == null &&
+                            eventResultInstance.noTrafficShapingAtAll == true &&
+                            eventResultInstance.connectivityProfile == null
+            boolean nullAndPredefined =
+                    currentCustomName == null &&
+                            eventResultInstance.noTrafficShapingAtAll == false &&
+                            eventResultInstance.connectivityProfile != null
+
+            return notNullAndNothingElse || nullAndNative || nullAndPredefined
+
+        })
 	}
 
 	static mapping = {
@@ -193,6 +251,7 @@ class EventResult implements CsiValue {
 		tag(index: 'GetLimitedMedianEventResultsBy')
 		medianValue(index: 'GetLimitedMedianEventResultsBy')
 		cachedView(index: 'GetLimitedMedianEventResultsBy')
+        connectivityProfile(index: 'GetLimitedMedianEventResultsBy')
 	}
 
 	static transients = ['csiRelevant', 'osmConfigCacheService']

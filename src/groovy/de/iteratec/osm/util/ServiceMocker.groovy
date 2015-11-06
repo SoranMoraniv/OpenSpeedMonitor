@@ -18,21 +18,21 @@
 package de.iteratec.osm.util
 
 import de.iteratec.osm.ConfigService
-import de.iteratec.osm.InMemoryConfigService
 import de.iteratec.osm.batch.Activity
 import de.iteratec.osm.batch.BatchActivity
 import de.iteratec.osm.batch.BatchActivityService
 import de.iteratec.osm.batch.Status
 import de.iteratec.osm.csi.*
+import de.iteratec.osm.dao.CriteriaSorting
 import de.iteratec.osm.measurement.environment.Browser
 import de.iteratec.osm.measurement.environment.BrowserService
 import de.iteratec.osm.measurement.environment.Location
 import de.iteratec.osm.measurement.environment.WebPageTestServer
 import de.iteratec.osm.measurement.environment.wptserverproxy.ProxyService
 import de.iteratec.osm.measurement.schedule.JobGroup
-import de.iteratec.osm.persistence.DbCleanupService
 import de.iteratec.osm.report.chart.*
 import de.iteratec.osm.result.*
+import de.iteratec.osm.result.dao.EventResultDaoService
 import grails.test.mixin.TestMixin
 import grails.test.mixin.support.GrailsUnitTestMixin
 import org.codehaus.groovy.grails.web.mapping.LinkGenerator
@@ -174,13 +174,13 @@ class ServiceMocker {
 		serviceToMockIn.eventResultService = eventResultService.createMock()
 	}
 	/**
-	 * Mocks methods in {@link JobResultService}.
+	 * Mocks methods in {@link JobResultDaoService}.
 	 * @param serviceToMockIn 
 	 * 		Grails-Service with the service to mock as instance-variable.
 	 */
-	void mockJobResultService(serviceToMockIn){
-		def jobResultService = mockFor(JobResultService, true)
-		jobResultService.demand.findJobResultByEventResult(1..10000) {
+	void mockJobResultDaoService(serviceToMockIn){
+		def jobResultDaoService = mockFor(JobResultDaoService, true)
+		jobResultDaoService.demand.findJobResultByEventResult(1..10000) {
 			EventResult eventResult ->
 			
 			JobResult jobResult1 = JobResult.findByTestId(testIdOfJobRunCsiGroup1)
@@ -197,7 +197,7 @@ class ServiceMocker {
 			//*/
 			
 		}
-		serviceToMockIn.jobResultService = jobResultService.createMock()
+		serviceToMockIn.jobResultDaoService = jobResultDaoService.createMock()
 	}
 	/**
 	 * Mocks methods in {@link BrowserService}.
@@ -331,6 +331,10 @@ class ServiceMocker {
 			String idJobGroup = mvTag.split(";")[0]
 			return idAsStringToJobGroupMap[idJobGroup]
 		}
+        measuredValueTagServiceMocked.demand.findJobGroupOfEventResultTag(0..10000) {String mvTag ->
+            String idJobGroup = mvTag.split(";")[0]
+            return idAsStringToJobGroupMap[idJobGroup]
+        }
 		measuredValueTagServiceMocked.demand.findMeasuredEventOfHourlyEventTag(0..10000) {String mvTag ->
 			String measuredEventId = mvTag.split(";")[1]
 			return idAsStringToMeasuredEventMap[measuredEventId]
@@ -398,14 +402,14 @@ class ServiceMocker {
 	 * @param serviceToMockIn
 	 * 		Grails-Service with the service to mock as instance-variable.
 	 * @param timeToCsMappings
-	 * 		To be returned from method {@link de.iteratec.osm.csi.TimeToCsMappingCacheService#getTimeToCsMappings()}.
+	 * 		To be returned from method {@link de.iteratec.osm.csi.TimeToCsMappingCacheService#getMappings()}.
 	 * @param frustrations
 	 * 		To be returned from method {@link de.iteratec.osm.csi.TimeToCsMappingCacheService#getCustomerFrustrations(de.iteratec.osm.csi.Page)}
 	 */
 	void mockTimeToCsMappingService(serviceToMockIn, timeToCsMappings, frustrations){
 		def timeToCsMappingCacheService = mockFor(TimeToCsMappingCacheService)
-		
-		timeToCsMappingCacheService.demand.getTimeToCsMappings(0..25) { ->
+
+		timeToCsMappingCacheService.demand.getMappingsFor(0..25) {Page page ->
 			return timeToCsMappings
 		}
 		timeToCsMappingCacheService.demand.getCustomerFrustrations(0..25) {Page page ->
@@ -428,6 +432,9 @@ class ServiceMocker {
 		timeToCsMappingService.demand.validFrustrationsExistFor(0..100) { Page testedPage ->
 			//not the concern of this test
 		}
+        timeToCsMappingService.demand.validMappingsExistFor(0..100) { Page testedPage ->
+            //not the concern of this test
+        }
 		serviceToMockIn.timeToCsMappingService = timeToCsMappingService.createMock()
 	}
 	/**
@@ -524,4 +531,47 @@ class ServiceMocker {
 		}
 		serviceToMockIn.pageService = pageServiceMock.createMock()
 	}
+
+    /**
+     * Mocks methods of{@link I18nService}.
+     */
+    void mockI18nService(serviceToMockIn) {
+        def i18nService = mockFor(I18nService, true)
+        i18nService.demand.msg(1..10000) {
+            String msgKey, String defaultMessage, List objs ->
+                return defaultMessage
+        }
+        serviceToMockIn.i18nService = i18nService.createMock()
+    }
+
+    /**
+     * Mocks methods of{@link PerformanceLoggingService}.
+     */
+    void mockPerformanceLoggingService(serviceToMockIn) {
+        def performanceLoggingService = mockFor(PerformanceLoggingService, true)
+        performanceLoggingService.demand.logExecutionTime(1..10000) {
+            PerformanceLoggingService.LogLevel level, String description, PerformanceLoggingService.IndentationDepth indentation, Closure toMeasure ->
+                toMeasure.call()
+        }
+        serviceToMockIn.performanceLoggingService = performanceLoggingService.createMock()
+    }
+
+    /**
+     * Mocks methods of{@link EventResultDaoService}.
+     */
+    void mockEventResultDaoService(serviceToMockIn, ArrayList<EventResult> eventResults) {
+        def eventResultDaoService = mockFor(EventResultDaoService, true)
+        eventResultDaoService.demand.getLimitedMedianEventResultsBy(1..10000) {
+            Date fromDate,
+            Date toDate,
+            Set<CachedView> cachedViews,
+            ErQueryParams queryParams,
+            Map<String, Number> gtConstraints,
+            Map<String, Number> ltConstraints,
+            Map listCriteriaRestrictionMap,
+            CriteriaSorting sorting ->
+                return eventResults
+        }
+        serviceToMockIn.eventResultDaoService = eventResultDaoService.createMock()
+    }
 }
